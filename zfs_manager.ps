@@ -1,0 +1,129 @@
+# Tự động yêu cầu quyền Admin
+if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+    Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    Exit
+}
+
+function Show-Header {
+    Clear-Host
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host "   🦈 OPENZFS MANAGER (Windows)" -ForegroundColor Cyan
+    Write-Host "============================================" -ForegroundColor Cyan
+}
+
+function Check-ZFS {
+    if (-not (Get-Command zpool -ErrorAction SilentlyContinue)) {
+        Write-Host "❌ Chưa cài OpenZFS on Windows!" -ForegroundColor Red; Pause; Exit
+    }
+}
+
+function Scan-Import {
+    Write-Host "--- IMPORT POOL ---" -ForegroundColor Yellow
+    $out = zpool import 2>&1
+    if ($out -match "no pools available") {
+        if ((zpool list).Count -gt 1) {
+            Write-Host "✅ Các pool đang online." -ForegroundColor Green
+            zpool list
+        } else {
+            Write-Host "⚠️ Không tìm thấy pool." -ForegroundColor Red
+        }
+    } else {
+        zpool import -a
+        Write-Host "✅ Đã import thành công." -ForegroundColor Green
+    }
+    Pause
+}
+
+function Eject-Pool {
+    zpool list
+    $p = Read-Host "Nhập tên Pool (hoặc 'all')"
+    if ($p -eq 'all') { zpool export -a } else { zpool export $p }
+    if ($?) { Write-Host "✅ Đã rút an toàn." -ForegroundColor Green }
+    Pause
+}
+
+function Rename-Pool-Fixed {
+    Write-Host "--- ĐỔI TÊN POOL ---" -ForegroundColor Yellow
+    zpool list
+    $old = Read-Host "Tên cũ"
+    $new = Read-Host "Tên MỚI"
+    
+    Write-Host "🔄 Đang xử lý..." -ForegroundColor Cyan
+    zpool export $old
+    zpool import $old $new
+    
+    if ($?) { 
+        # Cập nhật mountpoint để đồng bộ metadata
+        zfs set mountpoint=/$new $new
+        Write-Host "✅ Đã đổi tên thành công: $new" -ForegroundColor Green 
+    } else {
+        Write-Host "❌ Lỗi khi đổi tên." -ForegroundColor Red
+    }
+    Pause
+}
+
+function Format-Create {
+    Write-Host "--- FORMAT & CREATE POOL ---" -ForegroundColor Red
+    Get-Disk | Select Number, FriendlyName, Size, PartitionStyle | FT -AutoSize
+    $n = Read-Host "Nhập Disk Number"
+    if (-not $n) { return }
+    if ((Read-Host "🔥 XÓA SẠCH Disk $n? (y/n)") -ne 'y') { return }
+
+    try {
+        Clear-Disk -Number $n -RemoveData -RemoveOEM -Confirm:$false -ErrorAction Stop
+        $name = Read-Host "Nhập tên Pool mới"
+        
+        Write-Host "🛠 Đang tạo Pool..." -ForegroundColor Cyan
+        zpool create -f -O compression=lz4 -O normalization=formD -O xattr=sa -O atime=off $name "PHYSICALDRIVE$n"
+        
+        if ($?) { 
+            # Set mountpoint chuẩn
+            zfs set mountpoint=/$name $name
+            Write-Host "✅ Tạo thành công!" -ForegroundColor Green 
+        }
+    } catch {
+        Write-Host "❌ Lỗi: $_" -ForegroundColor Red
+    }
+    Pause
+}
+
+function Scrub-Pool {
+    Write-Host "--- SCRUB HEALTH CHECK ---" -ForegroundColor Blue
+    zpool list
+    $p = Read-Host "Nhập tên pool check sức khỏe"
+    if ($p) {
+        zpool scrub $p
+        Write-Host "✅ Đã bắt đầu tiến trình Scrub." -ForegroundColor Green
+    }
+    Pause
+}
+
+function Show-Status {
+    Write-Host "--- ZPOOL STATUS ---" -ForegroundColor Blue
+    zpool status -v
+    Pause
+}
+
+# --- MAIN LOOP ---
+Check-ZFS
+do {
+    Show-Header
+    Write-Host "1. 🔌 Import Pool"
+    Write-Host "2. ⏏️  Eject Pool"
+    Write-Host "3. 🛠  Format & Tạo Pool"
+    Write-Host "4. 🏥 Scrub Health Check"
+    Write-Host "5. 🏷  Đổi tên Pool"
+    Write-Host "6. 📊 Zpool Status"
+    Write-Host "0. ❌ Thoát"
+    
+    $c = Read-Host "Chọn chức năng"
+    switch ($c) {
+        '1' { Scan-Import }
+        '2' { Eject-Pool }
+        '3' { Format-Create }
+        '4' { Scrub-Pool }
+        '5' { Rename-Pool-Fixed }
+        '6' { Show-Status }
+        '0' { Exit }
+    }
+} while ($true)
