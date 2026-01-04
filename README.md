@@ -18,6 +18,25 @@ Script cung cấp menu trực quan để thực hiện các tháo tác ZFS phổ
     *   **Rollback**: Khôi phục dữ liệu về thời điểm cũ chỉ trong vài giây.
     *   Xóa Snapshot không cần thiết.
 
+8.  **🚑 Fix Suspended Pool**:
+    *   Tự động phát hiện pool bị treo (do ngắt kết nối/lỏng cáp).
+    *   Hỗ trợ **Clear Errors** (kết nối lại) hoặc **Force Export** (cưỡng chế ngắt) để cứu hệ thống khỏi bị treo.
+9.  **🌡️ Check SSD Health (TBW)**:
+    *   Đọc thông số S.M.A.R.T của ổ cứng (yêu cầu `smartmontools`).
+    *   Theo dõi: Tuổi thọ (Percentage Used), Tổng ghi (TBW), và Lỗi vật lý.
+    *   **Auto-Install**: Tự động cài đặt tool trên macOS/Linux nếu thiếu.
+10. **⚡ SSD TRIM**:
+    *   Tối ưu hóa hiệu năng cho ổ SSD (Manual & Auto-TRIM).
+    *   Theo dõi tiến độ TRIM theo thời gian thực.
+11. **🗂️ Dataset Manager**:
+    *   Tạo Dataset con (VD: `tank/Data`, `tank/Phim`).
+    *   Cấu hình nén (**Compression**): `lz4` (default), `zstd` (mạnh), `off` (video).
+    *   Cấu hình giới hạn (**Quota**): Giới hạn dung lượng thư mục (VD: 500G).
+12. **🚀 Replication (Backup)**:
+    *   **Clone Pool**: Sao chép toàn bộ dữ liệu từ Pool A -> Pool B chỉ với 1 cú click.
+    *   Hỗ trợ gửi Snapshot cụ thể.
+13. **🛠️ Replace Bad Disk**: Hướng dẫn thay thế ổ cứng hỏng (Resilver) từng bước một.
+
 ---
 
 ## 💻 Hỗ Trợ Đa Nền Tảng

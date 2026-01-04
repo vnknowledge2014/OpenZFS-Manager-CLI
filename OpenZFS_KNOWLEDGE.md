@@ -589,6 +589,12 @@ Chuột phải `zfs_manager.ps` → **Run with PowerShell** (as Administrator)
 5. 🏷  Đổi tên Pool                     ← Rename an toàn
 6. 📊 Zpool Status                      ← Xem trạng thái
 7. 📸 Quản lý Snapshot                  ← Tạo/Xóa/Rollback
+8. 🚑 Fix Suspended Pool                ← Cứu hộ pool bị treo
+9. 🌡️  Check SSD Health (TBW)           ← Xem tuổi thọ SSD
+10.⚡ SSD TRIM                          ← Tối ưu tốc độ SSD
+11.🗂️  Dataset Manager                  ← Quản lý thư mục/Quota
+12.🚀 Replication                       ← Backup toàn bộ
+13.🛠️  Replace Bad Disk                 ← Thay ổ hỏng
 0. ❌ Thoát
 ```
 

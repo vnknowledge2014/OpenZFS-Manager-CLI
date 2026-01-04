@@ -560,6 +560,191 @@ check_smart_health() {
 }
 
 # ==============================================================================
+# 10. SSD TRIM
+# ==============================================================================
+trim_pool() {
+    echo -e "${BLUE}--- SSD TRIM (TỐI ƯU HIỆU NĂNG) ---${NC}"
+    zpool list -o name,autotrim,health
+    echo -e "\n${YELLOW}Ghi chú: 'autotrim=on' nghĩa là ZFS sẽ tự động TRIM ngầm.${NC}"
+    echo -e "${CYAN}Nhập tên pool (VD: Lexar):${NC}"
+    read -r PNAME
+    
+    if [ -z "$PNAME" ]; then return; fi
+    
+    echo "1. ⚡ Chạy TRIM thủ công ngay (Manual Run)"
+    echo "2. 🔄 Bật/Tắt tự động TRIM (Auto-TRIM)"
+    read -p "Chọn: " tr_choice
+    
+    case $tr_choice in
+        1)
+            echo -e "${YELLOW}🔄 Đang gửi lệnh TRIM...${NC}"
+            zpool trim "$PNAME"
+            echo -e "${GREEN}✅ Đã gửi lệnh. Kiểm tra tiến độ tại mục [6] Status.${NC}"
+            ;;
+        2)
+            CUR_VAL=$(zpool get -H -o value autotrim "$PNAME")
+            if [ "$CUR_VAL" == "on" ]; then
+                zpool set autotrim=off "$PNAME"
+                echo -e "${RED}🛑 Đã TẮT Auto-TRIM cho $PNAME.${NC}"
+            else
+                zpool set autotrim=on "$PNAME"
+                echo -e "${GREEN}✅ Đã BẬT Auto-TRIM cho $PNAME.${NC}"
+            fi
+            ;;
+    esac
+    read -p "Ấn Enter để tiếp tục..."
+}
+
+# ==============================================================================
+# 11. DATASET MANAGER
+# ==============================================================================
+dataset_manager() {
+    while true; do
+        echo -e "\n${BLUE}--- QUẢN LÝ DATASET / THƯ MỤC ---${NC}"
+        echo "1. 📂 Tạo Dataset Mới (New Folder)"
+        echo "2. 🗜️  Cấu hình Nén (Compression)"
+        echo "3. 💾 Giới hạn Dung lượng (Quota)"
+        echo "4. 📍 Xem Danh sách Dataset"
+        echo "0. 🔙 Quay lại"
+        read -p "Chọn chức năng: " ds_choice
+        
+        case $ds_choice in
+            1)
+                zfs list -t filesystem
+                echo -e "${CYAN}Nhập tên Dataset Mới (VD: tank/Phim):${NC}"
+                read -r NEW_DS
+                if [ -n "$NEW_DS" ]; then
+                    zfs create "$NEW_DS"
+                    [ $? -eq 0 ] && echo -e "${GREEN}✅ Đã tạo: $NEW_DS${NC}"
+                fi
+                ;;
+            2)
+                zfs list -t filesystem
+                echo -e "${CYAN}Nhập tên Dataset cần chỉnh (VD: tank/Phim):${NC}"
+                read -r DS_NAME
+                echo -e "${CYAN}Chọn chuẩn nén (lz4=Chuẩn, zstd=Mạnh, off=Tắt):${NC}"
+                read -r COMP_ALGO
+                if [ -n "$DS_NAME" ] && [ -n "$COMP_ALGO" ]; then
+                    zfs set compression="$COMP_ALGO" "$DS_NAME"
+                    echo -e "${GREEN}✅ Đã set compression=$COMP_ALGO cho $DS_NAME${NC}"
+                fi
+                ;;
+            3)
+                zfs list -H -o name,quota,used
+                echo -e "${CYAN}Nhập tên Dataset (VD: tank/TimeMachine):${NC}"
+                read -r DS_NAME
+                echo -e "${CYAN}Nhập giới hạn (VD: 500G, 1T, none=Bỏ giới hạn):${NC}"
+                read -r QUOTA_SIZE
+                if [ -n "$DS_NAME" ] && [ -n "$QUOTA_SIZE" ]; then
+                    zfs set quota="$QUOTA_SIZE" "$DS_NAME"
+                    echo -e "${GREEN}✅ Đã set quota=$QUOTA_SIZE cho $DS_NAME${NC}"
+                fi
+                ;;
+            4)
+                zfs list -o name,used,avail,compressratio,mountpoint
+                read -p "Ấn Enter để tiếp tục..."
+                ;;
+            0) return ;;
+            *) echo -e "${RED}Không hợp lệ!${NC}" ;;
+        esac
+    done
+}
+
+# ==============================================================================
+# 12. REPLICATION MANAGER
+# ==============================================================================
+replication_manager() {
+    echo -e "${BLUE}--- SAO CHÉP POOL VÀ DATASET (REPLICATION) ---${NC}"
+    echo "1. 👯 Clone toàn bộ Pool A -> Pool B (Backup)"
+    echo "2. 📤 Gửi Snapshot cụ thể"
+    echo "0. 🔙 Quay lại"
+    read -p "Chọn chức năng: " rep_choice
+    
+    case $rep_choice in
+        1)
+            zpool list
+            echo -e "${CYAN}Nhập Pool NGUỒN (VD: Lexar):${NC}"
+            read -r SRC
+            echo -e "${CYAN}Nhập Pool ĐÍCH (VD: SEAGATE):${NC}"
+            read -r DST
+            
+            if [ -z "$SRC" ] || [ -z "$DST" ]; then return; fi
+            if [ "$SRC" == "$DST" ]; then echo -e "${RED}Nguồn và đích phải khác nhau!${NC}"; return; fi
+            
+            echo -e "${RED}⚠️  CẢNH BÁO: Dữ liệu trên $DST/backup_$SRC sẽ bị ghi đè!${NC}"
+            read -p "Tiếp tục? (yes/no): " confirm
+            if [[ "$confirm" != "yes" ]]; then return; fi
+            
+            # Tạo snapshot tạm
+            SNAP_NAME="repl_$(date +%s)"
+            zfs snapshot -r "$SRC@$SNAP_NAME"
+            
+            echo -e "${YELLOW}🚀 Đang gửi dữ liệu... (Có thể rất lâu)${NC}"
+            # Send stream
+            zfs send -R "$SRC@$SNAP_NAME" | zfs receive -F "$DST/backup_$SRC"
+            
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}✅ Backup hoàn tất tại $DST/backup_$SRC${NC}"
+                # Xóa snapshot tạm để tiết kiệm chỗ
+                zfs destroy -r "$SRC@$SNAP_NAME"
+            else
+                echo -e "${RED}❌ Lỗi backup.${NC}"
+            fi
+            ;;
+        2)
+            zfs list -t snapshot
+            echo -e "${CYAN}Nhập snapshot cần gửi (VD: tank/data@snap1):${NC}"
+            read -r SNAP
+            echo -e "${CYAN}Nhập dataset đích (VD: backup_pool/restore):${NC}"
+            read -r DEST_DS
+            
+            if [ -n "$SNAP" ] && [ -n "$DEST_DS" ]; then
+                 zfs send "$SNAP" | zfs receive "$DEST_DS"
+                 echo -e "${GREEN}✅ Đã gửi xong.${NC}"
+            fi
+            ;;
+        *) return ;;
+    esac
+}
+
+# ==============================================================================
+# 13. DATA REPAIR (THAY ĐĨA HỎNG)
+# ==============================================================================
+repair_manager() {
+    echo -e "${RED}--- THAY THẾ Ổ ĐĨA HỎNG (REPAIR) ---${NC}"
+    zpool status
+    
+    echo -e "\n${YELLOW}Hướng dẫn:${NC}"
+    echo "1. Tìm ID ổ cứng bị lỗi (thường hiện là UNAVAIL hoặc chuỗi số dài)."
+    echo "2. Cắm ổ cứng mới vào máy."
+    echo "3. Lấy ID ổ cứng mới (VD: /dev/disk4 hoặc /dev/sdb)."
+    echo -e "--------------------------------------------------------"
+    
+    echo -e "${CYAN}Nhập tên Pool (VD: data):${NC}"
+    read -r POOL
+    if [ -z "$POOL" ]; then return; fi
+    
+    echo -e "${CYAN}Nhập ID ổ HỎNG cũ (VD: 123456789... hoặc ata-WD...):${NC}"
+    read -r OLD_DISK
+    
+    echo -e "${CYAN}Nhập đường dẫn ổ MỚI (VD: /dev/disk4 hoặc /dev/disk/by-id/...):${NC}"
+    read -r NEW_DISK
+    
+    if [ -n "$OLD_DISK" ] && [ -n "$NEW_DISK" ]; then
+        echo -e "${YELLOW}🔄 Đang thay thế... Quá trình Resilver sẽ bắt đầu.${NC}"
+        zpool replace "$POOL" "$OLD_DISK" "$NEW_DISK"
+        
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}✅ Lệnh replace thành công!${NC}"
+            echo -e "${BLUE}Dùng 'zpool status' để theo dõi tiến độ Resilver.${NC}"
+        else
+            echo -e "${RED}❌ Lỗi replace. Kiểm tra lại ID ổ đĩa.${NC}"
+        fi
+    fi
+    read -p "Ấn Enter để tiếp tục..."
+}
+
+# ==============================================================================
 # MAIN MENU
 # ==============================================================================
 check_install_zfs
@@ -577,6 +762,10 @@ while true; do
     echo "7. 📸 Quản lý Snapshot"
     echo "8. 🚑 Fix Suspended Pool"
     echo "9. 🌡️  Check SSD Health (TBW)"
+    echo "10. ⚡ SSD TRIM (Optimize Performance)"
+    echo "11. 🗂️  Dataset Manager (Create/Limit/Compress)"
+    echo "12. 🚀 Replication (Copy Pool A -> Pool B)"
+    echo "13. 🛠️  Replace Bad Disk (Repair)"
     echo "0. ❌ Thoát"
     read -p "Chọn chức năng: " choice
     
@@ -586,10 +775,14 @@ while true; do
         3) format_disk ;;
         4) scrub_pool ;;
         5) rename_pool ;;
-        6) zpool status -v ;; 
+        6) zpool status -v -t ;; 
         7) snapshot_manager ;;
         8) fix_suspended ;;
         9) check_smart_health ;;
+        10) trim_pool ;;
+        11) dataset_manager ;;
+        12) replication_manager ;;
+        13) repair_manager ;;
         0) exit 0 ;;
         *) echo -e "${RED}Không hợp lệ!${NC}" ;;
     esac
