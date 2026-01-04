@@ -690,6 +690,85 @@ Script đã áp dụng các best practices:
 
 ---
 
+## Phụ Lục: Giải Mã Các Thông Số & Lỗi Thường Gặp
+
+### 1. Giải Thích Các Trường Trong `zpool list`
+
+Khi bạn chạy lệnh `zpool list` hoặc `zpus status`, bảng dữ liệu sẽ hiện ra như sau. Dưới đây là ý nghĩa từng cột:
+
+| Cột (Field) | Ý Nghĩa (Meaning) | Giải Thích Chi Tiết |
+|:------------|:------------------|:--------------------|
+| **NAME** | Tên Pool | Tên định danh của pool (VD: Lexar, SEAGATE). |
+| **SIZE** | Dung lượng thô | Tổng dung lượng vật lý của các ổ đĩa cộng lại (trước khi trừ parity/redundancy). |
+| **ALLOC** | Đã dùng | Dung lượng vật lý đã được ghi dữ liệu. |
+| **FREE** | Còn trống | Dung lượng vật lý còn lại. |
+| **CKPOINT** | Checkpoint | Checkpoint (nếu có) để rewind toàn bộ pool. Thường là `-` hoặc dung lượng checkpoint. |
+| **EXPANDSZ**| Expand Size | Dung lượng có thể mở rộng thêm (nếu bạn thay ổ bé bằng ổ to hơn nhưng chưa set autoexpand). |
+| **FRAG** | Phân mảnh | % Phân mảnh của dữ liệu. Càng cao càng chậm. >50% là đáng báo động. |
+| **CAP** | Capacity | % Dung lượng đã dùng. **Tuyệt đối không để vượt quá 80-90%** vì hiệu năng sẽ giảm sút nghiêm trọng ("slabbing"). |
+| **DEDUP** | Deduplication | Tỉ lệ loại bỏ dữ liệu trùng lặp. `1.00x` nghĩa là không deduplication (tắt). |
+| **HEALTH** | Sức khỏe | `ONLINE` (Tốt), `DEGRADED` (Có ổ hỏng nhưng còn chạy), `FAULTED` (Hỏng hẳn), `SUSPENDED` (Treo). |
+| **ALTROOT** | Alternate Root | Điểm gắn tạm thời (thường dùng khi boot từ rescue USB). |
+
+> **⚠️ Lưu ý về FRAG (Phân mảnh):**
+> - **2% là Rất Tốt**: Đừng lo lắng. ZFS hoạt động theo cơ chế Copy-on-Write nên luôn có một chút phân mảnh. Chỉ cần lo khi nó vượt quá 80%.
+> - **SCRUB KHÔNG SỬA FRAG**: Lệnh `scrub` chỉ kiểm tra dữ liệu hỏng (corruption). ZFS không có lệnh "defrag" truyền thống. Cách duy nhất để giảm phân mảnh là copy dữ liệu ra và copy lại (Send/Receive).
+
+### 2. Xử Lý Lỗi `SUSPENDED`
+
+**Triệu chứng:**
+- Status `HEALTH` hiện là `SUSPENDED`.
+- Các lệnh `zfs`, `zpool` liên quan đến pool này bị treo (hang).
+- Không thể truy cập dữ liệu trong mountpoint.
+
+**Nguyên nhân & Giải pháp:**
+
+| Nguyên nhân | Giải pháp khắc phục | Phòng tránh |
+|:------------|:--------------------|:------------|
+| **Cáp lỏng / Ngắt kết nối** | 1. **Kiểm tra cáp**: Cắm lại chặt chẽ.<br>2. **Clear lỗi**: Chạy `sudo zpool clear <pool_name>`.<br>3. **Nếu treo**: Khởi động lại máy. | Dùng cáp chất lượng cao. Cố định ổ cứng. |
+| **Không đủ điện (USB)** | Dùng Hub có nguồn phụ hoặc cắm trực tiếp vào cổng sau (PC). | Không dùng hub chia rẻ tiền cho ổ cứng cơ (HDD). |
+| **Ổ cứng ngủ (Sleep)** | Tắt tính năng sleep của ổ cứng/hệ điều hành. | macOS: *System Settings > Energy Saver > "Put hard disks to sleep..." (OFF)* |
+| **Ổ chết (Bad Sector)** | Chạy `zpool status -v` để xem lỗi. | Thay ổ mới ngay nếu `DEGRADED`. |
+
+> **💡 Thủ thuật thoát "bị stuck":**
+> Nếu `zpool export` bị treo mãi, có thể là do I/O đang kẹt trong kernel.
+> 1. Thử `sudo zpool export -f <pool_name>` (Force export).
+> 2. Nếu vẫn treo: Buộc phải khởi động lại máy để giải phóng kernel thread.
+
+---
+
+### 3. Kiểm Tra Độ Bền SSD (TBW)
+
+ZFS quản lý dữ liệu **logic**, còn độ bền vật lý (TBW - Total Bytes Written) được quản lý bởi chip của ổ cứng. Để xem thông số này, bạn cần dùng công cụ đọc dữ liệu **S.M.A.R.T**.
+
+Công cụ tốt nhất trên macOS/Linux là **smartmontools**.
+
+**Cách cài đặt (macOS):**
+```bash
+brew install smartmontools
+```
+
+**Cách kiểm tra:**
+```bash
+# 1. Tìm ID ổ đĩa (VD: disk2)
+diskutil list
+
+# 2. Xem thông tin SMART
+sudo smartctl -a /dev/disk2
+```
+
+**Các chỉ số cần quan tâm:**
+- **Percentage Used**: Tuổi thọ đã dùng (0% là mới, 100% là hết hạn bảo hành).
+- **Data Units Written**: Tổng dữ liệu đã ghi (TBW).
+- **Media and Data Integrity Errors**: Lỗi dữ liệu vật lý (cực kỳ quan trọng).
+
+> **⚠️ Lỗi "Operation not supported":**
+> Nếu bạn gặp lỗi này, nghĩa là **Box/Dock USB của bạn không hỗ trợ chip SMART**.
+> - Đây là hạn chế phần cứng của box, không sửa được bằng phần mềm.
+> - Bạn cần tháo ổ ra cắm trực tiếp vào máy (SATA/NVMe) hoặc thay box khác có hỗ trợ "SMART Passthrough".
+
+---
+
 ## Phụ Lục: Quick Reference
 
 ### Các Lệnh ZFS Thường Dùng

@@ -142,6 +142,12 @@ scan_and_import() {
         if zpool list | grep -q "NAME"; then
              echo -e "${GREEN}✅ Các pool đang hoạt động:${NC}"
              zpool list
+             
+             # Check Suspended
+             if zpool list | grep -q "SUSPENDED"; then
+                 echo -e "\n${RED}⚠️  PHÁT HIỆN POOL BỊ TREO (SUSPENDED)!${NC}"
+                 echo -e "${YELLOW}👉 Hãy chọn chức năng [8] Fix Suspended Pool để xử lý ngay.${NC}"
+             fi
              return
         fi
         echo -e "${RED}❌ Không tìm thấy pool nào (Exported).${NC}"
@@ -409,6 +415,151 @@ snapshot_manager() {
 }
 
 # ==============================================================================
+# 8. XỬ LÝ LỖI SUSPENDED
+# ==============================================================================
+fix_suspended() {
+    echo -e "${BLUE}--- KHẮC PHỤC LỖI SUSPENDED (TREO) ---${NC}"
+    
+    # Tìm pool bị suspended
+    SUSPENDED_POOLS=$(zpool list -H -o name,health | grep "SUSPENDED" | cut -f1)
+    
+    if [ -z "$SUSPENDED_POOLS" ]; then
+        echo -e "${GREEN}✅ Không phát hiện pool nào bị SUSPENDED.${NC}"
+        return
+    fi
+    
+    echo -e "${RED}⚠️  PHÁT HIỆN POOL BỊ TREO: ${YELLOW}$SUSPENDED_POOLS${NC}"
+    echo -e "Trạng thái này thường do ổ cứng bị ngắt kết nối đột ngột hoặc thiếu điện."
+    echo -e "\nCác phương án xử lý:"
+    echo "1. 🧹 Clear Errors (Thử kết nối lại và xóa lỗi)"
+    echo "2. ⏏️  Force Export (Cưỡng chế rút, có thể cần khởi động lại)"
+    echo "0. 🔙 Quay lại"
+    read -p "Chọn phương án: " fix_choice
+    
+    case $fix_choice in
+        1)
+            for pool in $SUSPENDED_POOLS; do
+                echo -e "${CYAN}Đang chạy 'zpool clear $pool'...${NC}"
+                zpool clear "$pool"
+                if [ $? -eq 0 ]; then
+                     echo -e "${GREEN}✅ Đã clear lỗi thành công. Hãy kiểm tra lại kết nối.${NC}"
+                else
+                     echo -e "${RED}❌ Không thể clear. Có thể ổ cứng vẫn chưa kết nối lại.${NC}"
+                fi
+            done
+            ;;
+        2)
+            for pool in $SUSPENDED_POOLS; do
+                echo -e "${CYAN}Đang chạy 'zpool export -f $pool'...${NC}"
+                zpool export -f "$pool"
+                if [ $? -eq 0 ]; then
+                     echo -e "${GREEN}✅ Đã cưỡng chế export thành công.${NC}"
+                else
+                     echo -e "${RED}❌ Vẫn bị treo. Bạn CẦN KHỞI ĐỘNG LẠI MÁY để giải phóng kernel.${NC}"
+                fi
+            done
+            ;;
+        *) return ;;
+    esac
+}
+
+# ==============================================================================
+# 9. CHECK SMART (TBW)
+# ==============================================================================
+check_smart_health() {
+    echo -e "${BLUE}--- KIỂM TRA SỨC KHỎE Ổ CỨNG (S.M.A.R.T) ---${NC}"
+    
+    if ! command -v smartctl &> /dev/null; then
+        echo -e "${YELLOW}⚠️  Chưa tìm thấy 'smartmontools'.${NC}"
+        read -p "Bạn có muốn cài đặt tự động không? (yes/no): " install_choice
+        
+        if [[ "$install_choice" == "yes" ]]; then
+            echo -e "${CYAN}🔄 Đang cài đặt smartmontools...${NC}"
+            if [[ "$OS_NAME" == "Darwin" ]]; then
+                # macOS: Chạy brew dưới quyền user thật
+                if sudo -u "$REAL_USER" command -v brew &> /dev/null; then
+                    sudo -u "$REAL_USER" brew install smartmontools
+                else
+                     echo -e "${RED}❌ Không tìm thấy Homebrew. Vui lòng cài thủ công.${NC}"; return
+                fi
+            elif [ -f /etc/debian_version ]; then
+                 apt update && apt install -y smartmontools
+            elif [ -f /etc/arch-release ]; then
+                 pacman -Sy --noconfirm smartmontools
+            elif [ -f /etc/nixos/configuration.nix ]; then
+                 echo -e "${RED}❌ Trên NixOS, hãy thêm 'smartmontools' vào environment.systemPackages và rebuild.${NC}"; return
+            else
+                 echo -e "${RED}❌ Không hỗ trợ distro này. Hãy cài 'smartmontools' thủ công.${NC}"; return
+            fi
+            
+            # Kiểm tra lại sau khi cài
+            if ! command -v smartctl &> /dev/null; then
+                echo -e "${RED}❌ Cài đặt thất bại. Vui lòng kiểm tra lại.${NC}"; return
+            fi
+            echo -e "${GREEN}✅ Cài đặt thành công!${NC}"
+            echo -e "--------------------------------------------"
+        else
+            echo -e "${RED}❌ Bạn đã hủy. Chức năng này cần smartmontools để hoạt động.${NC}"; return
+        fi
+    fi
+
+    # Liệt kê ổ đĩa để user chọn
+    if [[ "$OS_NAME" == "Darwin" ]]; then
+        diskutil list external physical
+        echo -e "${CYAN}Nhập tên ổ đĩa vật lý (VD: disk2, disk4):${NC}"
+    else
+        lsblk -d -o NAME,MODEL,SIZE,TYPE
+        echo -e "${CYAN}Nhập tên ổ đĩa (VD: sdb):${NC}"
+    fi
+    
+    read -r DISK_ID
+    
+    local DISK_PATH="/dev/$DISK_ID"
+    if [ ! -e "$DISK_PATH" ]; then
+        echo -e "${RED}❌ Ổ đĩa không tồn tại!${NC}"
+        return
+    fi
+    
+    # 1. Kiểm tra kết nối cơ bản (Timeout 10s)
+    echo -e "${YELLOW}🔍 Kiểm tra kết nối (Timeout 10s)...${NC}"
+    # Sử dụng perl để timeout (có sẵn trên macOS/Linux)
+    if ! perl -e 'alarm shift; exec @ARGV' 10 smartctl -i "$DISK_PATH" &>/dev/null; then
+         echo -e "${RED}❌ Lỗi: Ổ đĩa không phản hồi (Timeout).${NC}"
+         echo -e "${YELLOW}Nguyên nhân có thể:${NC}"
+         echo "1. Ổ cứng đang ngủ sâu (Sleep) -> Hãy thử truy cập file nhẹ xong thử lại."
+         echo "2. Controller của Box/Dock USB không hỗ trợ SMART passthrough."
+         read -p "Ấn Enter để quay lại..."
+         return
+    fi
+
+    # 2. Đọc dữ liệu chi tiết
+    echo -e "${YELLOW}🔍 Đang đọc dữ liệu chi tiết...${NC}"
+    
+    # Lấy toàn bộ output (thêm -T permissive để bỏ qua lỗi nhỏ)
+    SMART_OUTPUT=$(smartctl -a -T permissive "$DISK_PATH" 2>&1)
+    
+    # Lọc thông tin quan trọng
+    FILTERED_OUTPUT=$(echo "$SMART_OUTPUT" | grep -E "Model Family|Device Model|User Capacity|Total_LBAs_Written|Data Units Written|Percentage Used|Power_On_Hours|Media_and_Data_Integrity|SMART overall-health self-assessment test result")
+    
+    if [ -n "$FILTERED_OUTPUT" ]; then
+        echo -e "${GREEN}✅ KẾT QUẢ PHÂN TÍCH:${NC}"
+        echo "$FILTERED_OUTPUT"
+    else
+        echo -e "${RED}⚠️  Không lọc được thông số tiêu chuẩn. Hiển thị toàn bộ output:${NC}"
+        echo "---------------------------------------------------"
+        echo "$SMART_OUTPUT"
+        echo "---------------------------------------------------"
+        echo -e "${YELLOW}Gợi ý: Nếu output báo lỗi 'Operation not supported', ổ cứng box/dock của bạn có thể không hỗ trợ SMART qua USB.${NC}"
+    fi
+    
+    echo -e "\n${GREEN}💡 GIẢI THÍCH:${NC}"
+    echo "   - Percentage Used: Tuổi thọ đã dùng (100% là hỏng/hết bảo hành)."
+    echo "   - Data Units Written: Lượng dữ liệu đã ghi (TBW - chỉ NVMe)."
+    echo "   - Media Integrity: Lỗi vật lý (phải bằng 0)."
+    read -p "Ấn Enter để quay lại..."
+}
+
+# ==============================================================================
 # MAIN MENU
 # ==============================================================================
 check_install_zfs
@@ -424,6 +575,8 @@ while true; do
     echo "5. 🏷  Đổi tên Pool"
     echo "6. 📊 Zpool Status"
     echo "7. 📸 Quản lý Snapshot"
+    echo "8. 🚑 Fix Suspended Pool"
+    echo "9. 🌡️  Check SSD Health (TBW)"
     echo "0. ❌ Thoát"
     read -p "Chọn chức năng: " choice
     
@@ -435,6 +588,8 @@ while true; do
         5) rename_pool ;;
         6) zpool status -v ;; 
         7) snapshot_manager ;;
+        8) fix_suspended ;;
+        9) check_smart_health ;;
         0) exit 0 ;;
         *) echo -e "${RED}Không hợp lệ!${NC}" ;;
     esac
