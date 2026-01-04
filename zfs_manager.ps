@@ -98,6 +98,131 @@ function Scrub-Pool {
     Pause
 }
 
+
+function Snapshot-Manager {
+    Write-Host "--- QUẢN LÝ SNAPSHOT ---" -ForegroundColor Blue
+    Write-Host "1. 📸 Tạo Snapshot Mới"
+    Write-Host "2. 📜 Liệt kê Snapshot"
+    Write-Host "3. 🔙 Rollback (Khôi phục)"
+    Write-Host "4. 🗑️  Xóa Snapshot"
+    Write-Host "0. Quay lại"
+    $c = Read-Host "Chọn"
+    switch ($c) {
+        '1' { $p = Read-Host "Tên Pool/Dataset"; $n = Read-Host "Tên Snap"; zfs snapshot "$p@$n"; if($?){Write-Host "✅ OK" -Fg Green} }
+        '2' { zfs list -t snapshot }
+        '3' { 
+            zfs list -t snapshot
+            $s = Read-Host "Nhập tên snapshot (VD: pool@snap)"
+            if ($s) { zfs rollback -r $s; if($?){Write-Host "✅ Đã rollback!" -Fg Green} }
+         }
+        '4' { $s = Read-Host "Nhập tên snapshot cần xóa"; if($s){zfs destroy $s; Write-Host "✅ Đã xóa" -Fg Green} }
+    }
+    Pause
+}
+
+function Fix-Suspended {
+    Write-Host "--- FIX SUSPENDED POOL ---" -ForegroundColor Red
+    $sus = zpool list -H -o name,health | Select-String "SUSPENDED"
+    if (-not $sus) { Write-Host "✅ Không có pool bị treo." -Fg Green; Pause; return }
+    
+    Write-Host "⚠️ PHÁT HIỆN SUSPENDED: $sus" -Fg Yellow
+    Write-Host "1. Clear Errors (Thử kết nối lại)"
+    Write-Host "2. Force Export (Cưỡng chế ngắt)"
+    $c = Read-Host "Chọn"
+    
+    $pname = $sus.ToString().Split("`t")[0]
+    if ($c -eq '1') { zpool clear $pname; Write-Host "Đã chạy clear." -Fg Cyan }
+    if ($c -eq '2') { zpool export -f $pname; Write-Host "Đã chạy export -f." -Fg Cyan }
+    Pause
+}
+
+function Check-Health {
+    Write-Host "--- CHECK SSD HEALTH (SMART) ---" -ForegroundColor Blue
+    if (-not (Get-Command smartctl -ErrorAction SilentlyContinue)) {
+        Write-Host "❌ Chưa cài smartmontools. Hãy cài đặt để dùng tính năng này." -Fg Red
+        Pause; return
+    }
+    Get-PhysicalDisk | Select FriendlyName, DeviceId, MediaType
+    $id = Read-Host "Nhập DeviceId (VD: 1, 2...)"
+    if ($id) {
+        Write-Host "🔍 Đang đọc SMART..." -Fg Yellow
+        smartctl -a "/dev/sd$id" -T permissive | Select-String "Model Family|Device Model|User Capacity|Total_LBAs_Written|Data Units Written|Percentage Used|Media_and_Data_Integrity"
+    }
+    Pause
+}
+
+function Trim-Pool {
+    Write-Host "--- SSD TRIM ---" -ForegroundColor Blue
+    zpool list
+    $p = Read-Host "Nhập tên Pool"
+    if ($p) {
+        Write-Host "1. Chạy TRIM ngay"
+        Write-Host "2. Bật Auto-TRIM"
+        $c = Read-Host "Chọn"
+        if ($c -eq '1') { zpool trim $p; Write-Host "✅ Đang chạy TRIM ngầm." -Fg Green }
+        if ($c -eq '2') { zpool set autotrim=on $p; Write-Host "✅ Đã bật Auto-TRIM." -Fg Green }
+    }
+    Pause
+}
+
+function Dataset-Manager {
+    Write-Host "--- DATASET MANAGER ---" -ForegroundColor Blue
+    Write-Host "1. Tạo Dataset Mới"
+    Write-Host "2. Chỉnh Compression"
+    Write-Host "3. Chỉnh Quota"
+    $c = Read-Host "Chọn"
+    
+    if ($c -eq '1') {
+        $n = Read-Host "Tên Dataset (VD: tank/Phim)"
+        if ($n) { zfs create $n; Write-Host "✅ Đã tạo." -Fg Green }
+    }
+    if ($c -eq '2') {
+        $n = Read-Host "Tên Dataset"
+        $v = Read-Host "Compression (lz4/zstd/off)"
+        if ($n -and $v) { zfs set compression=$v $n; Write-Host "✅ OK" -Fg Green }
+    }
+    if ($c -eq '3') {
+        $n = Read-Host "Tên Dataset"
+        $v = Read-Host "Quota (VD: 500G)"
+        if ($n -and $v) { zfs set quota=$v $n; Write-Host "✅ OK" -Fg Green }
+    }
+    Pause
+}
+
+function Replication-Manager {
+    Write-Host "--- REPLICATION ---" -ForegroundColor Blue
+    Write-Host "Clone A -> B"
+    $src = Read-Host "Pool Nguồn"
+    $dst = Read-Host "Pool Đích"
+    if ($src -and $dst) {
+        $snap = "repl_$(Get-Date -Format FileDateTime)"
+        Write-Host "🚀 Đang gửi dữ liệu..." -Fg Yellow
+        zfs snapshot -r "$src@$snap"
+        # PowerShell pipes can be tricky with binary data, using cmd /c for pipe safety
+        cmd /c "zfs send -R $src@$snap | zfs receive -F $dst/backup_$src"
+        if ($?) {
+            Write-Host "✅ Xong." -Fg Green
+            zfs destroy -r "$src@$snap"
+        } else {
+            Write-Host "❌ Lỗi." -Fg Red
+        }
+    }
+    Pause
+}
+
+function Repair-Manager {
+    Write-Host "--- REPAIR DISK ---" -ForegroundColor Red
+    zpool status
+    $p = Read-Host "Tên Pool"
+    $old = Read-Host "ID Ổ Hỏng (GUID)"
+    $new = Read-Host "ID Ổ Mới (PhysicalDrive...)"
+    if ($p -and $old -and $new) {
+        zpool replace $p $old $new
+        Write-Host "✅ Đã chạy lệnh replace. Kiểm tra status để xem resilver." -Fg Green
+    }
+    Pause
+}
+
 function Show-Status {
     Write-Host "--- ZPOOL STATUS ---" -ForegroundColor Blue
     zpool status -v
@@ -114,6 +239,14 @@ do {
     Write-Host "4. 🏥 Scrub Health Check"
     Write-Host "5. 🏷  Đổi tên Pool"
     Write-Host "6. 📊 Zpool Status"
+    Write-Host "7. 📸 Quản lý Snapshot"
+    Write-Host "8. 🚑 Fix Suspended Pool"
+    Write-Host "9. 🌡️  Check SSD Health"
+    Write-Host "------------------------------"
+    Write-Host "10. ⚡ SSD TRIM"
+    Write-Host "11. 🗂️  Dataset Manager"
+    Write-Host "12. 🚀 Replication"
+    Write-Host "13. 🛠️  Replace Bad Disk"
     Write-Host "0. ❌ Thoát"
     
     $c = Read-Host "Chọn chức năng"
@@ -124,6 +257,13 @@ do {
         '4' { Scrub-Pool }
         '5' { Rename-Pool-Fixed }
         '6' { Show-Status }
+        '7' { Snapshot-Manager }
+        '8' { Fix-Suspended }
+        '9' { Check-Health }
+        '10' { Trim-Pool }
+        '11' { Dataset-Manager }
+        '12' { Replication-Manager }
+        '13' { Repair-Manager }
         '0' { Exit }
     }
 } while ($true)
