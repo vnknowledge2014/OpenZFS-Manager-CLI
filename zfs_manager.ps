@@ -210,6 +210,70 @@ function Replication-Manager {
     Pause
 }
 
+function Migration-Manager {
+    Write-Host "--- 🚚 MIGRATION ASSISTANT (Robocopy) ---" -ForegroundColor Blue
+    Write-Host "Copy dữ liệu giữa ZFS và ổ ngoài (NTFS/ExFAT)." -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "1. 📥 Import: Non-ZFS -> ZFS (Copy VÀO ZFS)"
+    Write-Host "2. 📤 Export: ZFS -> Non-ZFS (Copy RA KHỎI ZFS)"
+    Write-Host "0. Quay lại"
+    $direction = Read-Host "Chọn"
+    
+    if ($direction -eq '0' -or -not $direction) { return }
+    
+    if ($direction -eq '1') {
+        # IMPORT: Non-ZFS -> ZFS
+        $source = Read-Host "Nhập đường dẫn NGUỒN (VD: D:\Data\File.zip)"
+        if (-not $source -or -not (Test-Path $source)) {
+            Write-Host "❌ Đường dẫn không tồn tại!" -ForegroundColor Red; Pause; return
+        }
+        
+        Write-Host "`n📂 Các Dataset ZFS hiện có:" -ForegroundColor Yellow
+        zfs list -o name,mountpoint
+        
+        $dest = Read-Host "`nNhập đường dẫn ZFS ĐÍCH (VD: Z:\tank\Folder)"
+    }
+    elseif ($direction -eq '2') {
+        # EXPORT: ZFS -> Non-ZFS
+        Write-Host "`n📂 Các Dataset ZFS hiện có:" -ForegroundColor Yellow
+        zfs list -o name,mountpoint
+        
+        $source = Read-Host "`nNhập đường dẫn ZFS NGUỒN (VD: Z:\tank\Folder\File.zip)"
+        if (-not $source -or -not (Test-Path $source)) {
+            Write-Host "❌ Đường dẫn không tồn tại!" -ForegroundColor Red; Pause; return
+        }
+        
+        $dest = Read-Host "Nhập đường dẫn ĐÍCH Non-ZFS (VD: E:\Backup)"
+    }
+    else {
+        Write-Host "❌ Lựa chọn không hợp lệ!" -ForegroundColor Red; Pause; return
+    }
+    
+    if (-not $dest) { return }
+    
+    # Confirm
+    Write-Host "`n⚠️  SẮP COPY:" -ForegroundColor Yellow
+    Write-Host "   Từ: $source" -ForegroundColor Cyan
+    Write-Host "   Đến: $dest" -ForegroundColor Cyan
+    $confirm = Read-Host "Tiếp tục? (yes/no)"
+    if ($confirm -ne 'yes') { Write-Host "Đã hủy." -ForegroundColor Red; Pause; return }
+    
+    # Execute robocopy
+    Write-Host "`n🚀 Đang chạy Robocopy..." -ForegroundColor Green
+    Write-Host "   Flags: /E /Z /J /MT:16 /R:3 /W:5" -ForegroundColor Gray
+    Write-Host ""
+    
+    robocopy $source $dest /E /Z /J /MT:16 /R:3 /W:5 /NP /ETA
+    
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -lt 8) {
+        Write-Host "`n✅ Copy hoàn tất!" -ForegroundColor Green
+    } else {
+        Write-Host "`n❌ Có lỗi xảy ra (Exit code: $exitCode)" -ForegroundColor Red
+    }
+    Pause
+}
+
 function Repair-Manager {
     Write-Host "--- REPAIR DISK ---" -ForegroundColor Red
     zpool status
@@ -247,6 +311,7 @@ do {
     Write-Host "11. 🗂️  Dataset Manager"
     Write-Host "12. 🚀 Replication"
     Write-Host "13. 🛠️  Replace Bad Disk"
+    Write-Host "14. 🚚 Migration (Robocopy)"
     Write-Host "0. ❌ Thoát"
     
     $c = Read-Host "Chọn chức năng"
@@ -264,6 +329,7 @@ do {
         '11' { Dataset-Manager }
         '12' { Replication-Manager }
         '13' { Repair-Manager }
+        '14' { Migration-Manager }
         '0' { Exit }
     }
 } while ($true)

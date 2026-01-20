@@ -14,7 +14,8 @@
 6. [Ứng Dụng Thực Tế](#ứng-dụng-thực-tế)
 7. [Hướng Dẫn Sử Dụng Với Project Này](#hướng-dẫn-sử-dụng-với-project-này)
 8. [Best Practices & Recommendations](#best-practices--recommendations)
-9. [Tài Liệu Tham Khảo](#tài-liệu-tham-khảo)
+9. [Chiến Lược Di Chuyển Dữ Liệu](#chiến-lược-di-chuyển-dữ-liệu)
+10. [Tài Liệu Tham Khảo](#tài-liệu-tham-khảo)
 
 ---
 
@@ -671,6 +672,69 @@ Script đã áp dụng các best practices:
 
 1 bản offsite:
 └── Cloud/Server khác hoặc ổ cứng cất riêng
+```
+
+---
+
+
+---
+
+# Phần V: Chiến Lược Di Chuyển Dữ Liệu (Migration)
+
+## Chiến Lược Copy & Đồng Bộ Tối Ưu
+
+Khi chuyển dữ liệu từ các hệ thống khác sang ZFS ( Migration), việc chọn đúng công cụ là yếu tố quyết định tốc độ và độ an toàn.
+
+### 1. Bảng Tóm Tắt Công Cụ
+
+| Từ (Nguồn) | Đến (Đích) | Công Cụ Khuyên Dùng | Lý Do Chính |
+|:-----------|:-----------|:--------------------|:------------|
+| **Windows** (NTFS/ReFS) | **OpenZFS** | `robocopy` | Tối ưu đa luồng (Multi-threaded), resume tốt, giữ metadata. |
+| **Linux/macOS** (ext4/APFS) | **OpenZFS** | `rsync` | Tiêu chuẩn vàng cho đồng bộ, resume khi đứt cáp, checksum file. |
+| **OpenZFS** | **OpenZFS** | `zfs send/receive` | **Nhanh nhất thế giới**. Block-level copy. Giữ nguyên snapshot. |
+| **Cùng 1 Ổ** (Local) | **OpenZFS** | `cp` hoặc GUI | Đơn giản, nhanh nhất cho file đơn lẻ vì không cần tính checksum diff. |
+
+### 2. Hướng Dẫn Chi Tiết
+
+#### A. Windows -> ZFS (Qua mạng SMB/Network)
+Sử dụng **Robocopy** (Built-in trên Windows). Đừng dùng Windows Explorer (Kéo thả) vì rất chậm và dễ lỗi.
+
+```powershell
+# Chạy trên Windows PowerShell (Admin)
+# /MT:16 = Dùng 16 luồng copy song song (Rất nhanh cho file nhỏ)
+# /E = Copy cả thư mục con
+# /Z = Restartable (Resume nếu đứt mạng)
+# /J = Unbuffered I/O (Tốt cho file lớn)
+robocopy D:\SourceData \\ServerZFS\ShareName /E /Z /J /MT:16
+```
+
+#### B. Linux/macOS -> ZFS (USB hoặc Mạng)
+Sử dụng **Rsync**. Đây là dao mổ đa năng cho mọi nhu cầu.
+
+```bash
+# Copy từ USB Ext4 sang ZFS Pool
+# -a: Archive (giữ quyền, ngày tháng)
+# -v: Verbose
+# -P: Progress bar + Partial resume
+rsync -avP /media/usb_drive/ /tank/dataset/
+```
+
+> **💡 Mẹo Tăng Tốc**: Trước khi copy vào ZFS, hãy bật `compression=lz4` trên dataset đích.
+> `sudo zfs set compression=lz4 tank/dataset`
+> (CPU nén nhanh hơn ổ cứng ghi -> Tăng tốc độ ghi thực tế).
+
+#### C. ZFS -> ZFS (Migration/Backup)
+Sử dụng **ZFS Send/Receive**. Đây là tính năng "sát thủ" của ZFS.
+
+```bash
+# 1. Tạo snapshot nguồn
+zfs snapshot tank/hoctap@migrate
+
+# 2. Gửi sang pool mới (cùng máy)
+zfs send tank/hoctap@migrate | zfs receive newpool/hoctap
+
+# 3. Gửi sang máy khác qua SSH
+zfs send tank/hoctap@migrate | ssh user@newserver 'zfs receive tank/backup'
 ```
 
 ---

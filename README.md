@@ -36,6 +36,10 @@ Script cung cấp menu trực quan để thực hiện các tháo tác ZFS phổ
     *   **Clone Pool**: Sao chép toàn bộ dữ liệu từ Pool A -> Pool B chỉ với 1 cú click.
     *   Hỗ trợ gửi Snapshot cụ thể.
 13. **🛠️ Replace Bad Disk**: Hướng dẫn thay thế ổ cứng hỏng (Resilver) từng bước một.
+14. **🚚 Migration Assistant**: Copy dữ liệu **hai chiều** giữa ZFS và ổ ngoài:
+    *   📥 **Import**: Non-ZFS → ZFS (Copy VÀO ZFS)
+    *   📤 **Export**: ZFS → Non-ZFS (Copy RA KHỎI ZFS)
+    *   Sử dụng `robocopy` (Windows) hoặc `rsync -avhP` (Linux/macOS).
 
 ---
 

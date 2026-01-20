@@ -708,6 +708,70 @@ replication_manager() {
 }
 
 # ==============================================================================
+# 14. MIGRATION ASSISTANT (RSYNC) - Non-ZFS ↔ ZFS
+# ==============================================================================
+migration_assistant() {
+    # Fix Tab completion for macOS/older Bash/Termux
+    bind '"\t":complete' 2>/dev/null
+    bind '"\C-i":complete' 2>/dev/null
+    bind "set completion-ignore-case on" 2>/dev/null
+    bind "set show-all-if-ambiguous on" 2>/dev/null
+    bind "set editing-mode emacs" 2>/dev/null
+
+    echo -e "\n${BLUE}--- 🚚 MIGRATION ASSISTANT ---${NC}"
+    echo "Copy dữ liệu giữa ZFS và ổ ngoài (ext4/NTFS/ExFAT/APFS)."
+    echo -e "${YELLOW}💡 Tip: ZFS ↔ ZFS hãy dùng Menu [12] Replication (nhanh hơn).${NC}\n"
+    echo "1. 📥 Import: Non-ZFS → ZFS"
+    echo "2. 📤 Export: ZFS → Non-ZFS"
+    echo "0. 🔙 Quay lại"
+    read -p "Chọn: " direction
+    
+    case $direction in
+        1)  # IMPORT
+            echo -e "${CYAN}Đường dẫn NGUỒN (Non-ZFS), VD: /media/usb/file.zip${NC}"
+            read -e -r SRC_PATH
+            echo -e "\n${YELLOW}📂 Dataset ZFS:${NC}"
+            zfs list -o name,mountpoint
+            echo -e "${CYAN}Đường dẫn ĐÍCH (ZFS), VD: /Volumes/Lexar/Backup${NC}"
+            read -e -r DST_PATH
+            ;;
+        2)  # EXPORT
+            echo -e "\n${YELLOW}📂 Dataset ZFS:${NC}"
+            zfs list -o name,mountpoint
+            echo -e "${CYAN}Đường dẫn NGUỒN (ZFS), VD: /Volumes/Lexar/file.zip${NC}"
+            read -e -r SRC_PATH
+            echo -e "${CYAN}Đường dẫn ĐÍCH (Non-ZFS), VD: /home/user/Backup${NC}"
+            read -e -r DST_PATH
+            ;;
+        0|"") return ;;
+        *) echo -e "${RED}Không hợp lệ!${NC}"; return ;;
+    esac
+    
+    # Trim quotes from drag-drop
+    SRC_PATH=$(echo "$SRC_PATH" | sed "s/^['\"]//;s/['\"]$//;s/ *$//")
+    DST_PATH=$(echo "$DST_PATH" | sed "s/^['\"]//;s/['\"]$//;s/ *$//")
+    
+    # Validate paths
+    if [ ! -e "$SRC_PATH" ]; then
+        echo -e "${RED}❌ Nguồn không tồn tại: $SRC_PATH${NC}"; return
+    fi
+    if [ ! -d "$DST_PATH" ]; then
+        echo -e "${RED}❌ Đích không tồn tại: $DST_PATH${NC}"; return
+    fi
+    
+    # Confirm and execute
+    echo -e "\n${YELLOW}⚠️  COPY: ${CYAN}$SRC_PATH${NC} → ${CYAN}$DST_PATH${NC}"
+    read -p "Tiếp tục? (yes/no): " confirm
+    [[ "$confirm" != "yes" ]] && { echo -e "${RED}Đã hủy.${NC}"; return; }
+    
+    echo -e "\n${GREEN}🚀 Rsync -avhP ...${NC}\n"
+    rsync -avhP "$SRC_PATH" "$DST_PATH"
+    
+    [ $? -eq 0 ] && echo -e "\n${GREEN}✅ Hoàn tất!${NC}" || echo -e "\n${RED}❌ Có lỗi!${NC}"
+    read -p "Enter để tiếp tục..."
+}
+
+# ==============================================================================
 # 13. DATA REPAIR (THAY ĐĨA HỎNG)
 # ==============================================================================
 repair_manager() {
@@ -766,6 +830,7 @@ while true; do
     echo "11. 🗂️  Dataset Manager (Create/Limit/Compress)"
     echo "12. 🚀 Replication (Copy Pool A -> Pool B)"
     echo "13. 🛠️  Replace Bad Disk (Repair)"
+    echo "14. 🚚 Migration Assistant (Rsync/ZFS)"
     echo "0. ❌ Thoát"
     read -p "Chọn chức năng: " choice
     
@@ -783,6 +848,7 @@ while true; do
         11) dataset_manager ;;
         12) replication_manager ;;
         13) repair_manager ;;
+        14) migration_assistant ;;
         0) exit 0 ;;
         *) echo -e "${RED}Không hợp lệ!${NC}" ;;
     esac
