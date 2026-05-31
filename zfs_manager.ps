@@ -287,6 +287,61 @@ function Repair-Manager {
     Pause
 }
 
+function Manage-Arc-Limit {
+    Write-Host "--- QUẢN LÝ BỘ NHỚ CACHE ZFS (ARC LIMIT) ---" -ForegroundColor Blue
+    
+    # Lấy thông tin RAM vật lý
+    $computerSystem = Get-CimInstance CIM_ComputerSystem
+    $physRAMBytes = $computerSystem.TotalPhysicalMemory
+    $physRAMGB = [Math]::Round($physRAMBytes / 1GB)
+    
+    # Lấy giới hạn ARC hiện tại từ Environment Variable
+    $currentARCObject = [Environment]::GetEnvironmentVariable("zfs_arc_max", "Machine")
+    
+    Write-Host "   - Tổng dung lượng RAM vật lý: $physRAMGB GB" -ForegroundColor Green
+    if ($null -eq $currentARCObject -or $currentARCObject -eq "0") {
+        Write-Host "   - Giới hạn ARC hiện tại: Mặc định hệ thống" -ForegroundColor Yellow
+    } else {
+        $currentARCGB = [Math]::Round([int64]$currentARCObject / 1GB)
+        Write-Host "   - Giới hạn ARC hiện tại: $currentARCGB GB ($currentARCObject bytes)" -ForegroundColor Green
+    }
+    Write-Host "--------------------------------------------------------"
+    Write-Host "Nhập giới hạn RAM tối đa mới cho ARC (đơn vị GB, VD: 8, 12, 16):"
+    Write-Host "*(Nhập '0' hoặc 'none' để đưa về mặc định của hệ thống)*"
+    $newLimit = Read-Host "Chọn"
+    
+    if (-not $newLimit) { return }
+    
+    $newLimitBytes = 0
+    if ($newLimit -match '^[0-9]+$') {
+        if ([int]$newLimit -eq 0) {
+            $newLimitBytes = 0
+        } else {
+            $newLimitBytes = [int64]$newLimit * 1GB
+        }
+    } elseif ($newLimit -eq 'none') {
+        $newLimitBytes = 0
+    } else {
+        Write-Host "❌ Lỗi: Giới hạn không hợp lệ. Phải là một số nguyên dương." -ForegroundColor Red
+        Pause; return
+    }
+    
+    Write-Host "🔄 Đang áp dụng cấu hình..." -ForegroundColor Cyan
+    try {
+        if ($newLimitBytes -eq 0) {
+            [Environment]::SetEnvironmentVariable("zfs_arc_max", $null, "Machine")
+            Write-Host "✅ Đã xóa giới hạn ARC (sử dụng mặc định hệ thống)." -ForegroundColor Green
+        } else {
+            [Environment]::SetEnvironmentVariable("zfs_arc_max", $newLimitBytes.ToString(), "Machine")
+            Write-Host "✅ Đã thiết lập giới hạn ARC vĩnh viễn là $newLimit GB ($newLimitBytes bytes)." -ForegroundColor Green
+        }
+        Write-Host "⚠️ Lưu ý: Bạn cần KHỞI ĐỘNG LẠI MÁY để thiết lập có hiệu lực trên Windows!" -ForegroundColor Yellow
+    } catch {
+        Write-Host "❌ Lỗi khi ghi cấu hình: $_" -ForegroundColor Red
+    }
+    Pause
+}
+
 function Show-Status {
     Write-Host "--- ZPOOL STATUS ---" -ForegroundColor Blue
     zpool status -v
@@ -312,6 +367,7 @@ do {
     Write-Host "12. 🚀 Replication"
     Write-Host "13. 🛠️  Replace Bad Disk"
     Write-Host "14. 🚚 Migration (Robocopy)"
+    Write-Host "15. 🧠 Quản lý RAM Cache ZFS (ARC Limit)"
     Write-Host "0. ❌ Thoát"
     
     $c = Read-Host "Chọn chức năng"
@@ -330,6 +386,7 @@ do {
         '12' { Replication-Manager }
         '13' { Repair-Manager }
         '14' { Migration-Manager }
+        '15' { Manage-Arc-Limit }
         '0' { Exit }
     }
 } while ($true)

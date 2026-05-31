@@ -809,6 +809,132 @@ repair_manager() {
 }
 
 # ==============================================================================
+# 15. QUẢN LÝ BỘ NHỚ CACHE ZFS (ARC LIMIT)
+# ==============================================================================
+manage_arc_limit() {
+    echo -e "${BLUE}--- QUẢN LÝ BỘ NHỚ CACHE ZFS (ARC LIMIT) ---${NC}"
+    
+    # Hiển thị thông tin RAM vật lý & ARC
+    if [[ "$OS_NAME" == "Darwin" ]]; then
+        PHYS_MEM_BYTES=$(sysctl -n hw.memsize)
+        PHYS_MEM_GB=$((PHYS_MEM_BYTES / 1073741824))
+        CURRENT_ARC_BYTES=$(sysctl -n vfs.zfs.arc.max 2>/dev/null || echo "0")
+    else
+        PHYS_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+        PHYS_MEM_GB=$((PHYS_MEM_KB / 1048576))
+        if [ -f /sys/module/zfs/parameters/zfs_arc_max ]; then
+            CURRENT_ARC_BYTES=$(cat /sys/module/zfs/parameters/zfs_arc_max)
+        else
+            CURRENT_ARC_BYTES="0"
+        fi
+    fi
+    
+    CURRENT_ARC_GB=$((CURRENT_ARC_BYTES / 1073741824))
+    
+    echo -e "   - Tổng dung lượng RAM vật lý: ${GREEN}${PHYS_MEM_GB} GB${NC}"
+    if [ "$CURRENT_ARC_BYTES" -eq 0 ]; then
+        echo -e "   - Giới hạn ARC hiện tại: ${YELLOW}Mặc định hệ thống${NC}"
+    else
+        echo -e "   - Giới hạn ARC hiện tại: ${GREEN}${CURRENT_ARC_GB} GB${NC} (${CURRENT_ARC_BYTES} bytes)"
+    fi
+    echo -e "--------------------------------------------------------"
+    echo -e "Nhập giới hạn RAM tối đa mới cho ARC (đơn vị GB, VD: 8, 12, 16):"
+    echo -e "*(Nhập '0' hoặc 'none' để đưa về mặc định của hệ thống)*"
+    read -r NEW_LIMIT
+    
+    if [ -z "$NEW_LIMIT" ]; then return; fi
+    
+    local NEW_LIMIT_BYTES=0
+    if [[ "$NEW_LIMIT" =~ ^[0-9]+$ ]]; then
+        if [ "$NEW_LIMIT" -eq 0 ]; then
+            NEW_LIMIT_BYTES=0
+        else
+            NEW_LIMIT_BYTES=$((NEW_LIMIT * 1073741824))
+        fi
+    elif [[ "$NEW_LIMIT" == "none" ]]; then
+        NEW_LIMIT_BYTES=0
+    else
+        echo -e "${RED}❌ Lỗi: Giới hạn không hợp lệ. Phải là một số nguyên dương.${NC}"
+        read -p "Ấn Enter để quay lại..."
+        return
+    fi
+    
+    echo -e "${YELLOW}🔄 Đang áp dụng cấu hình mới...${NC}"
+    
+    if [[ "$OS_NAME" == "Darwin" ]]; then
+        # macOS
+        sysctl -w vfs.zfs.arc.max="$NEW_LIMIT_BYTES"
+        
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}✅ Đã áp dụng tức thì thành công!${NC}"
+            
+            # Ghi vào cấu hình để giữ sau reboot
+            read -p "Bạn có muốn lưu vĩnh viễn cấu hình này sau khi khởi động lại máy? (yes/no): " save_confirm
+            if [[ "$save_confirm" == "yes" ]]; then
+                mkdir -p /etc/zfs
+                if [ "$NEW_LIMIT_BYTES" -eq 0 ]; then
+                    sed -i '' '/vfs.zfs.arc.max/d' /etc/zfs/zfs.conf 2>/dev/null || true
+                    echo -e "${GREEN}✅ Đã xóa giới hạn vĩnh viễn trong /etc/zfs/zfs.conf (sử dụng mặc định).${NC}"
+                else
+                    if [ -f /etc/zfs/zfs.conf ]; then
+                        sed -i '' '/vfs.zfs.arc.max/d' /etc/zfs/zfs.conf 2>/dev/null || true
+                    fi
+                    echo "vfs.zfs.arc.max=$NEW_LIMIT_BYTES" >> /etc/zfs/zfs.conf
+                    echo -e "${GREEN}✅ Đã lưu cấu hình vĩnh viễn vào /etc/zfs/zfs.conf!${NC}"
+                fi
+            fi
+        else
+            echo -e "${RED}❌ Lỗi khi áp dụng sysctl vfs.zfs.arc.max.${NC}"
+        fi
+        
+    else
+        # Linux (Ubuntu, NixOS, etc.)
+        if [ -f /etc/nixos/configuration.nix ]; then
+            echo -e "${YELLOW}ℹ️  Trên NixOS, cấu hình động có thể không được duy trì sau khi rebuild.${NC}"
+            echo -e "Để cấu hình vĩnh viễn trên NixOS, hãy thêm cấu hình này vào ${CYAN}/etc/nixos/configuration.nix${NC}:"
+            if [ "$NEW_LIMIT_BYTES" -eq 0 ]; then
+                echo -e "${CYAN}  boot.extraModprobeConfig = \"options zfs zfs_arc_max=0\";${NC}"
+            else
+                echo -e "${CYAN}  boot.extraModprobeConfig = \"options zfs zfs_arc_max=$NEW_LIMIT_BYTES\";${NC}"
+            fi
+            echo -e "${YELLOW}Sau đó chạy: sudo nixos-rebuild switch${NC}"
+        fi
+        
+        # Áp dụng trực tiếp vào sysfs
+        if [ -f /sys/module/zfs/parameters/zfs_arc_max ]; then
+            echo "$NEW_LIMIT_BYTES" > /sys/module/zfs/parameters/zfs_arc_max
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}✅ Đã áp dụng tức thì thành công!${NC}"
+                
+                # Cấu hình vĩnh viễn cho Debian/Ubuntu
+                if [ ! -f /etc/nixos/configuration.nix ]; then
+                    read -p "Bạn có muốn lưu vĩnh viễn cấu hình này sau khi khởi động lại máy? (yes/no): " save_confirm
+                    if [[ "$save_confirm" == "yes" ]]; then
+                        mkdir -p /etc/modprobe.d
+                        if [ "$NEW_LIMIT_BYTES" -eq 0 ]; then
+                            sed -i '/zfs_arc_max/d' /etc/modprobe.d/zfs.conf 2>/dev/null || true
+                            echo -e "${GREEN}✅ Đã xóa giới hạn vĩnh viễn trong /etc/modprobe.d/zfs.conf.${NC}"
+                        else
+                            if [ -f /etc/modprobe.d/zfs.conf ]; then
+                                    sed -i '/zfs_arc_max/d' /etc/modprobe.d/zfs.conf 2>/dev/null || true
+                            fi
+                            echo "options zfs zfs_arc_max=$NEW_LIMIT_BYTES" >> /etc/modprobe.d/zfs.conf
+                            echo -e "${GREEN}✅ Đã lưu cấu hình vĩnh viễn vào /etc/modprobe.d/zfs.conf!${NC}"
+                        fi
+                    fi
+                fi
+            else
+                echo -e "${RED}❌ Lỗi khi ghi vào /sys/module/zfs/parameters/zfs_arc_max.${NC}"
+            fi
+        else
+            echo -e "${RED}❌ Không tìm thấy module ZFS hoặc thông số zfs_arc_max.${NC}"
+        fi
+    fi
+    
+    read -p "Ấn Enter để tiếp tục..."
+}
+
+# ==============================================================================
 # MAIN MENU
 # ==============================================================================
 check_install_zfs
@@ -831,6 +957,7 @@ while true; do
     echo "12. 🚀 Replication (Copy Pool A -> Pool B)"
     echo "13. 🛠️  Replace Bad Disk (Repair)"
     echo "14. 🚚 Migration Assistant (Rsync/ZFS)"
+    echo "15. 🧠 Quản lý RAM Cache ZFS (ARC Limit)"
     echo "0. ❌ Thoát"
     read -p "Chọn chức năng: " choice
     
@@ -849,6 +976,7 @@ while true; do
         12) replication_manager ;;
         13) repair_manager ;;
         14) migration_assistant ;;
+        15) manage_arc_limit ;;
         0) exit 0 ;;
         *) echo -e "${RED}Không hợp lệ!${NC}" ;;
     esac
